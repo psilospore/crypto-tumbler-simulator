@@ -5,18 +5,18 @@ import play.api.libs.ws.ahc._
 import play.api.libs.ws.JsonBodyReadables._
 import play.api.libs.ws.JsonBodyWritables._
 import play.api.libs.json._
-import play.api.libs.json.Reads._ 
-import play.api.libs.functional.syntax._ 
-import com.typesafe.config.Config
-import akka.stream.Materializer
+import play.api.libs.json.Reads._
+import play.api.libs.functional.syntax._
+import com.typesafe.config.{Config, ConfigFactory}
+import akka.stream.{ActorMaterializer, Materializer}
 
 import scala.async.Async._
 import scala.concurrent.Future
-
 import DefaultBodyReadables._
-import scala.concurrent.ExecutionContext.Implicits._
 
+import scala.concurrent.ExecutionContext.Implicits._
 import JobcoinClient.PlaceholderResponse
+import akka.actor.ActorSystem
 
 class JobcoinClient(config: Config)(implicit materializer: Materializer) {
   private val wsClient = StandaloneAhcWSClient()

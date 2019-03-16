@@ -20,3 +20,9 @@ libraryDependencies ++= Seq(
   "com.typesafe.akka" %% "akka-stream" % "2.5.12",
   "com.typesafe.akka" %% "akka-stream-testkit" % "2.5.12" % Test
 )
+
+val initialConsoleCommands = "import com.gemini.jobcoin._"
+initialCommands in console := initialConsoleCommands
+initialCommands in consoleQuick := initialConsoleCommands
+
+cancelable in Global := true

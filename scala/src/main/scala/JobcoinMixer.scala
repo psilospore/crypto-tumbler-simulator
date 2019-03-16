@@ -10,18 +10,13 @@ import scala.concurrent.ExecutionContext.Implicits._
 
 object JobcoinMixer {
   object CompletedException extends Exception { }
+  private implicit lazy val actorSystem = ActorSystem()
+  private implicit lazy val materializer = ActorMaterializer()
+  private lazy val config = ConfigFactory.load()
+  lazy val client = new JobcoinClient(config)
 
   def main(args: Array[String]): Unit = {
-    // Create an actor system
-    implicit val actorSystem = ActorSystem()
-    implicit val materializer = ActorMaterializer()
-
-    // Load Config
-    val config = ConfigFactory.load()
-
-    // Test HTTP client
-    // val client = new JobcoinClient(config)
-    // client.testGet().map(response => println(s"Response:\n$response"))
+    client.testGet().map(response => println(s"Response:\n$response"))
 
     try {
       while (true) {
