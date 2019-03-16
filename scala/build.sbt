@@ -21,8 +21,12 @@ libraryDependencies ++= Seq(
   "com.typesafe.akka" %% "akka-stream-testkit" % "2.5.12" % Test
 )
 
+libraryDependencies += "org.typelevel" %% "cats-core" % "1.6.0"
+
 val initialConsoleCommands = "import com.gemini.jobcoin._"
 initialCommands in console := initialConsoleCommands
 initialCommands in consoleQuick := initialConsoleCommands
 
 cancelable in Global := true
+
+scalacOptions += "-Ypartial-unification"

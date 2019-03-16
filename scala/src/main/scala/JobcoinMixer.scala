@@ -2,18 +2,22 @@ package com.gemini.jobcoin
 
 import java.util.UUID
 
-import scala.io.StdIn
-import com.typesafe.config.ConfigFactory
 import akka.actor.ActorSystem
 import akka.stream.ActorMaterializer
-import scala.concurrent.ExecutionContext.Implicits._
+import com.typesafe.config.ConfigFactory
 
+import scala.concurrent.ExecutionContext.Implicits._
+import scala.io.StdIn
+
+//TODO maybe move prompt stuff to another area or something
+//House actor
+//
 object JobcoinMixer {
-  object CompletedException extends Exception { }
-  private implicit lazy val actorSystem = ActorSystem()
+  object CompletedException extends Exception {}
+  private implicit lazy val actorSystem  = ActorSystem()
   private implicit lazy val materializer = ActorMaterializer()
-  private lazy val config = ConfigFactory.load()
-  lazy val client = new JobcoinClient(config)
+  private lazy val config                = ConfigFactory.load()
+  lazy val client                        = new JobcoinClient(config)
 
   def main(args: Array[String]): Unit = {
     client.testGet().map(response => println(s"Response:\n$response"))
@@ -24,13 +28,15 @@ object JobcoinMixer {
         val line = StdIn.readLine()
 
         if (line == "quit") throw CompletedException
-        
+
         val addresses = line.split(",")
         if (line == "") {
           println(s"You must specify empty addresses to mix into!\n$helpText")
         } else {
           val depositAddress = UUID.randomUUID()
-          println(s"You may now send Jobcoins to address $depositAddress. They will be mixed and sent to your destination addresses.")
+          println(
+            s"You may now send Jobcoins to address $depositAddress. They will be mixed and sent to your destination addresses."
+          )
         }
       }
     } catch {
@@ -40,7 +46,8 @@ object JobcoinMixer {
     }
   }
 
-  val prompt: String = "Please enter a comma-separated list of new, unused Jobcoin addresses where your mixed Jobcoins will be sent."
+  val prompt: String =
+    "Please enter a comma-separated list of new, unused Jobcoin addresses where your mixed Jobcoins will be sent."
   val helpText: String =
     """
       |Jobcoin Mixer
