@@ -1,5 +1,11 @@
-# Scala Jobcoin
-Simple base project for the Jobcoin project using Scala and SBT. It accepts return address as arguments and prints out a deposit address to the user for them to send their funds to. The rest of the application is left unimplemented.
+# Jobcoin Tumbler
+
+A simple tumbler that runs on Jobcoin.
+
+## Developer Notes
+
+I've attempted to explain any non-common patterns, or usages of libraries outside of the provided libraries.
+Such as my comment on extension methods or on Cats.
 
 ### Run
 `sbt run`
@@ -7,3 +13,20 @@ Simple base project for the Jobcoin project using Scala and SBT. It accepts retu
 
 ### Test
 `sbt test`
+
+## Mixing 
+
+## TODOs
+
+These are things I would want to do if I had more time or might do before submission.
+
+### Persistance
+
+If the jobcoin mixer dies I would want to recover and retry any unfinished transactions.
+
+### Better recovery mechanism when the Jobcoin API is down
+
+Right now I'm simply attempting a constant amount of times before giving up
+
+### Handle when a user does not have enough funds in the Tumbler's deposit address
+
