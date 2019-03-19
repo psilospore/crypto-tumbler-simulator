@@ -2,7 +2,7 @@ package com.gemini.jobcoin
 
 import java.util.UUID
 
-import akka.actor.{Actor, ActorRef, Props, Timers}
+import akka.actor.{Actor, ActorRef, PoisonPill, Props, Timers}
 import akka.event.Logging
 
 import scala.concurrent.duration._

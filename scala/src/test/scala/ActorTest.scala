@@ -23,14 +23,14 @@ import cats.instances.either._
 import cats.instances.option._
 
 class ActorTest
-    extends TestKit(ActorSystem("MySpec"))
+    extends TestKit(ActorSystem("JobcoinActorTest"))
     with ImplicitSender
     with MockFactory
     with WordSpecLike
     with Matchers
     with BeforeAndAfterAll {
 
-  implicit val executionContext = ExecutionContext.Implicits.global
+  implicit val executionContext: ExecutionContext = ExecutionContext.Implicits.global
 
   val testSafeAddress1  = "testSafeAddress1"
   val testSafeAddress2  = "testSafeAddress2"
@@ -39,40 +39,72 @@ class ActorTest
 
   val testDepositAddress = "testDepositAddress"
 
-  var tumblingTransactionActor: ActorRef       = _
-  var mockJobcoinWebService: JobcoinWebService = stub[JobcoinWebService
-  var mixingActorProbe: TestProbe              = TestProbe()
-  logProbe(mixingActorProbe)
+  "A TumblingTransactionActor should tumble funds from a address, to the house address, to the safe addresses" must {
 
-  override def beforeAll: Unit = {
-    mockJobcoinWebService = stub[JobcoinWebService]
-    tumblingTransactionActor = mixingActorProbe.childActorOf(
+    val managingTestProbe: TestProbe             = TestProbe()
+    val mockJobcoinWebService: JobcoinWebService = stub[JobcoinWebService]
+    val tumblingTransactionActor: ActorRef = managingTestProbe.childActorOf(
       TumblingTransactionActor.props(testSafeAddresses, testDepositAddress, mockJobcoinWebService)
     )
-  }
 
-  "A TumblingTransactionActor" must {
+    logProbe(managingTestProbe)
 
-    "Should move balance from deposit address to house address" in {
-      val testAmount = 10.34
+    val testAmount = 10.34
 
-      (mockJobcoinWebService.checkBalance _)
-        .when(testDepositAddress)
-        .returns(scala.concurrent.Future(UserBalance(testAmount, List()).validNel[String]))
+    //Expected API calls
+    val jobcoinCallToCheckBalance = (mockJobcoinWebService.checkBalance _)
+      .when(testDepositAddress)
 
+    val jobcoinCallToHouseAddress = (mockJobcoinWebService.transfer _)
+      .when(testDepositAddress, MixingActor.HOUSE_ADDRESS, testAmount)
+
+    //Mock responses to API calls
+    jobcoinCallToCheckBalance.returns(scala.concurrent.Future(UserBalance(testAmount, List()).validNel[String]))
+    jobcoinCallToHouseAddress.returns(scala.concurrent.Future(().validNel[String]))
+
+    "should move balance from deposit address to house address" in {
+      system.scheduler.scheduleOnce(3 seconds, tumblingTransactionActor, TumblingTransactionActor.Initialize)
+      managingTestProbe.expectMsg(2 minutes, MixingActor.DepositReceived(testAmount, testSafeAddresses))
+    }
+
+    "should have checked the balance through the Jobcoin API" in {
+      jobcoinCallToCheckBalance.atLeastOnce()
+    }
+
+    "should have transferred to the house address from the user address only once" in {
+      jobcoinCallToHouseAddress.once()
+    }
+
+    "should wait to transfer deposit to safe address until receiving message to" in {
       (mockJobcoinWebService.transfer _)
-        .when(testDepositAddress, MixingActor.HOUSE_ADDRESS, testAmount)
-        .returns(scala.concurrent.Future(().validNel[String]))
+        .when(where { (source, _, _) =>
+          source == MixingActor.HOUSE_ADDRESS
+        })
+        .never()
 
-      //Start
-      system.scheduler.scheduleOnce(2 seconds, tumblingTransactionActor, TumblingTransactionActor.Initialize)
-      mixingActorProbe.expectMsg(2 minutes, MixingActor.DepositReceived(testAmount, testSafeAddresses))
+      val portionOfTestAmount = testAmount * 0.4
+      tumblingTransactionActor ! TumblingTransactionActor.AttemptTransferToSafeAddress(testSafeAddress1, portionOfTestAmount)
+
+      //TODO
+//      managingTestProbe.expectMsg(2 minutes, MixingActor.ProcessedDepositSuccess(testAmount, testSafeAddresses))
+
+//      (mockJobcoinWebService.transfer _)
+//        .when(MixingActor.HOUSE_ADDRESS, testSafeAddress1, portionOfTestAmount)
+//        .once()
+
     }
 
   }
 
-  private def logProbe(testProbe: TestProbe) = {
-    mixingActorProbe.setAutoPilot(new testkit.TestActor.AutoPilot {
+  "A MixingActor should" must {
+    //TODO STUB
+  }
+
+  /**
+    * Logs messages received to test probe. Helpful for debugging.
+    */
+  private def logProbe(testProbe: TestProbe): Unit = {
+    testProbe.setAutoPilot(new testkit.TestActor.AutoPilot {
       override def run(sender: ActorRef, msg: Any): TestActor.AutoPilot = {
         system.log.info(s"TestProbe received $msg")
         this
