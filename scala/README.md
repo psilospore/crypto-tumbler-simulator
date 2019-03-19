@@ -26,7 +26,10 @@ If the jobcoin mixer dies I would want to recover and retry any unfinished trans
 
 ### Better recovery mechanism when the Jobcoin API is down
 
-Right now I'm simply attempting a constant amount of times before giving up
+Right now I'm simply attempting a constant amount of times and just counting failures
 
 ### Handle when a user does not have enough funds in the Tumbler's deposit address
 
+### Dependency injection
+
+### Better tests
