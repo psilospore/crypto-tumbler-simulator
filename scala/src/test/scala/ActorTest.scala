@@ -4,8 +4,8 @@ import akka.actor.{ActorRef, ActorSystem, Props}
 import akka.testkit
 import akka.testkit.{ImplicitSender, TestActor, TestActors, TestKit, TestProbe}
 import com.gemini.jobcoin.JobcoinWebService.UserBalance
-import com.gemini.jobcoin.TumblingTransactionActor.Initialize
-import com.gemini.jobcoin.{JobcoinWebService, MixingActor, TumblingTransactionActor}
+import com.gemini.jobcoin.TransactionActor.Initialize
+import com.gemini.jobcoin.{JobcoinWebService, MixingActor, TransactionActor}
 import org.scalamock.scalatest.MockFactory
 import org.scalatest._
 
@@ -21,6 +21,7 @@ import cats.syntax.nonEmptyTraverse._
 import cats.instances.list._
 import cats.instances.either._
 import cats.instances.option._
+import com.gemini.jobcoin.MixingActor.DepositInProcess
 
 class ActorTest
     extends TestKit(ActorSystem("JobcoinActorTest"))
@@ -39,12 +40,12 @@ class ActorTest
 
   val testDepositAddress = "testDepositAddress"
 
-  "A TumblingTransactionActor should tumble funds from a address, to the house address, to the safe addresses" must {
+  "A TransactionActorActor should tumble funds from a address, to the house address, to the safe addresses" must {
 
     val managingTestProbe: TestProbe             = TestProbe()
     val mockJobcoinWebService: JobcoinWebService = stub[JobcoinWebService]
-    val tumblingTransactionActor: ActorRef = managingTestProbe.childActorOf(
-      TumblingTransactionActor.props(testSafeAddresses, testDepositAddress, mockJobcoinWebService)
+    val transactionActorActor: ActorRef = managingTestProbe.childActorOf(
+      TransactionActor.props(testSafeAddresses, testDepositAddress, mockJobcoinWebService)
     )
 
     logProbe(managingTestProbe)
@@ -63,7 +64,7 @@ class ActorTest
     jobcoinCallToHouseAddress.returns(scala.concurrent.Future(().validNel[String]))
 
     "should move balance from deposit address to house address" in {
-      system.scheduler.scheduleOnce(3 seconds, tumblingTransactionActor, TumblingTransactionActor.Initialize)
+      system.scheduler.scheduleOnce(3 seconds, transactionActorActor, TransactionActor.Initialize)
       managingTestProbe.expectMsg(2 minutes, MixingActor.DepositReceived(testAmount, testSafeAddresses))
     }
 
@@ -83,14 +84,27 @@ class ActorTest
         .never()
 
       val portionOfTestAmount = testAmount * 0.4
-      tumblingTransactionActor ! TumblingTransactionActor.AttemptTransferToSafeAddress(testSafeAddress1, portionOfTestAmount)
+      val depositInProcess    = DepositInProcess(transactionActorActor, testAmount, testSafeAddresses.tail)
 
-      //TODO
-//      managingTestProbe.expectMsg(2 minutes, MixingActor.ProcessedDepositSuccess(testAmount, testSafeAddresses))
+      val joncoinTransferToSafe = (mockJobcoinWebService.transfer _)
+        .when(MixingActor.HOUSE_ADDRESS, testSafeAddress1, portionOfTestAmount)
 
-//      (mockJobcoinWebService.transfer _)
-//        .when(MixingActor.HOUSE_ADDRESS, testSafeAddress1, portionOfTestAmount)
-//        .once()
+      joncoinTransferToSafe
+        .returns(scala.concurrent.Future(().validNel[String]))
+
+      system.scheduler.scheduleOnce(3 seconds, transactionActorActor, TransactionActor.AttemptTransferToSafeAddress(
+        depositInProcess,
+        testSafeAddress1,
+        portionOfTestAmount
+      ))
+
+      managingTestProbe.expectMsg(
+        2 minutes,
+        MixingActor.ProcessedDepositSuccess(depositInProcess, portionOfTestAmount, testSafeAddress1)
+      )
+
+      joncoinTransferToSafe
+        .once()
 
     }
 

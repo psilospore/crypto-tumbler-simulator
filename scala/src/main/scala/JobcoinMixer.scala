@@ -23,7 +23,7 @@ object JobcoinMixer {
 
   //TODO validate addresses?
   def main(args: Array[String]): Unit = {
-    val mixingActor = actorSystem.actorOf(Props[MixingActor], name = "mixingactor")
+    val mixingActor = actorSystem.actorOf(MixingActor.props(), name = "mixingactor")
 
     try {
       while (true) {
@@ -35,7 +35,7 @@ object JobcoinMixer {
         val safeAddresses = line.split(",")
         if (line == "") {
           println(s"You must specify empty addresses to mix into!\n$helpText")
-        } else if (safeAddresses.size == 1) {
+        } else if (safeAddresses.nonEmpty) {
           if (safeAddresses.size < MINIMUM_RECOMMENDED_ADDRESSES) {
             println(s"Warning we recommend at least $MINIMUM_RECOMMENDED_ADDRESSES")
           }
@@ -47,7 +47,7 @@ object JobcoinMixer {
                |
                """.stripMargin
           )
-          mixingActor ! MixingActor.CreateTumblingTransaction(safeAddresses.toList, depositAddress.toString)
+          mixingActor ! MixingActor.CreateTransactionActor(safeAddresses.toList, depositAddress.toString)
         }
       }
     } catch {

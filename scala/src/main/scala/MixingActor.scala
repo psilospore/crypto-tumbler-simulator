@@ -3,7 +3,7 @@ import java.time.Instant
 import java.util.UUID
 
 import MixingActor.State
-import akka.actor.{Actor, ActorRef, PoisonPill, Timers}
+import akka.actor.{Actor, ActorRef, PoisonPill, Props, Timers}
 import akka.event.Logging
 
 import scala.collection.mutable
@@ -34,7 +34,7 @@ class MixingActor(var state: State) extends Actor with Timers {
       val fee             = deposit * FEE
       val amountToDeposit = deposit - fee
       //TODO store the fee we've collected so far.
-      state.depositsInProcess += DepositInProcess(sender(), amountToDeposit, addresses, Instant.now)
+      state.depositsInProcess += DepositInProcess(sender(), amountToDeposit, addresses)
       log.info(s"Queued ${sender()} in ${state.depositsInProcess}")
     }
     case ProcessDeposit if state.depositsInProcess.size > MINIMUM_PAID_ACTORS_FOR_PAYOUT => {
@@ -63,7 +63,7 @@ class MixingActor(var state: State) extends Actor with Timers {
             (rnd.nextInt(60) + 20) / 100.0 * deposit.remainder
           }
 
-        deposit.tumblingTransactionActor ! TumblingTransactionActor
+        deposit.transactionActorActor ! TransactionActor
           .WithdrawFromHouse(deposit.unusedAddresses.head, amount)
         log.info("Attempting deposit to safe address") //TODO
       })
@@ -89,7 +89,7 @@ class MixingActor(var state: State) extends Actor with Timers {
       if (newDepositInProcess.unusedAddresses.nonEmpty) {
         state.depositsInProcess.enqueue(depositInProcess)
       } else {
-        depositInProcess.tumblingTransactionActor ! PoisonPill //TODO this is how you kill again right?
+        depositInProcess.transactionActorActor ! PoisonPill //TODO this is how you kill again right?
       }
     //In case of shutdown payout remaining. Could also be used for testing.
     case ForceFinishPayout => () //TODO maybe I could do this if I have to shut down or maybe for testing
@@ -97,30 +97,39 @@ class MixingActor(var state: State) extends Actor with Timers {
 }
 
 object MixingActor {
+
+  def props() = Props(new MixingActor(State()))
+
   private val MINIMUM_PAID_ACTORS_FOR_PAYOUT = 20
   private val PROCESS_DELAY: FiniteDuration  = 1 minute
   private val FEE: Double                    = 0.03
-  val HOUSE_ADDRESS: String                  = UUID.randomUUID.toString //TODO
+  val HOUSE_ADDRESS: String                  = UUID.randomUUID.toString //TODO get from config
 
   implicit val depositInProcessOrd: Ordering[DepositInProcess] = Ordering.by[DepositInProcess, Instant](_.addedToQueue)
+
+  //TODO maybe remove state or move failure in? TODO create transition state.
   case class State(
     depositsInProcess: mutable.PriorityQueue[DepositInProcess] = mutable.PriorityQueue[DepositInProcess]()
   )
 
   //TODO rename this is something else now. MixingTransactionState. MixingTransactionInProcessState
   case class DepositInProcess(
-    tumblingTransactionActor: ActorRef,
+    transactionActorActor: ActorRef,
     remainder: Double,
     unusedAddresses: List[String],
-    addedToQueue: Instant
+    addedToQueue: Instant = Instant.now
   )
 
-  case class CreateTumblingTransaction(addresses: List[String], depositAddress: String)
+  // Messages
+
+  case class CreateTransactionActor(addresses: List[String], depositAddress: String)
 
   //Deposit received in house address
   case class DepositReceived(deposit: Double, addresses: List[String])
+
   case object ProcessDeposit
   case object ForceFinishPayout
+
   case class ProcessedDepositSuccess(depositInProcess: DepositInProcess, amount: Double, address: String)
   case class ProcessedDepositFailure(depositInProcess: DepositInProcess)
 }
