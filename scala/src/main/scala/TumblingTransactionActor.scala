@@ -10,7 +10,7 @@ import TumblingTransactionActor._
 import cats.syntax.validated
 import cats.instances.future
 import cats.syntax.try_
-import cats.data.{Validated, ValidatedNel}
+import cats.data.{NonEmptyList, Validated, ValidatedNel}
 import cats.syntax.either._
 import cats.syntax.option._
 import cats.syntax.validated._
@@ -19,6 +19,9 @@ import cats.syntax.nonEmptyTraverse._
 import cats.instances.list._
 import cats.instances.either._
 import cats.instances.option._
+import com.gemini.jobcoin.JobcoinWebService.UserBalance
+
+import scala.concurrent.Future
 
 /**
   * Represents a request to tumble funds. Owned and managed by the MixingActor.
@@ -30,7 +33,9 @@ import cats.instances.option._
   * 3) Transfer to user provided safe address: def attemptTransferToSafeAddress
   * 4) Finished transaction: PoisonPilled
   *
-  * TODO params documentation
+  * @param safeAddresses a list of user provided addresses to eventually deposit to
+  * @param depositAddress the address to deposit the initial amount. Will be transfered to deposit account.
+  * @param jobcoinWebService
   */
 class TumblingTransactionActor(
   safeAddresses: List[String],
@@ -42,59 +47,75 @@ class TumblingTransactionActor(
   import context.dispatcher
 
   val log      = Logging(context.system, this)
-  val failures = 0
+  var failures = 0
+
+  private def handleResponse[R](
+    responseFuture: Future[ValidatedNel[JobcoinWebService.Error, R]],
+    success: R => Any,
+    failure: NonEmptyList[JobcoinWebService.Error] => Any = _ => ()
+  ): Unit =
+    for {
+      responseValidated <- responseFuture
+    } {
+      responseValidated match {
+        case Valid(response) => success(response)
+        case Invalid(errs) => {
+          log.info(s"Unable to fetch due to errors: ${errs.toList.mkString("\n")}")
+          failures += 1
+          failure(errs)
+        }
+      }
+    }
 
   def waitingForDeposit: Receive = {
     case CheckBalance =>
-      log.info(s"Checking balance")
-      for {
-        balanceValidation <- jobcoinWebService.checkBalance(depositAddress)
-      } yield {
-        balanceValidation match {
-          case Valid(balance) =>
-            val deposit = balance.balance
-            if (deposit > 0) {
-              log.info(s"Received balance of $deposit to $depositAddress")
-              context become attemptTransferToHouse
-              val attemptTransferMsg = AttemptTransferToHouse(deposit)
-              self ! attemptTransferMsg
-              timers.cancelAll()
-              timers.startPeriodicTimer(AttemptTransferToHouse, attemptTransferMsg, DELAY)
-            }
-          case Invalid(err) => {
-            log.info(s"Unable to fetch due to errors: ${err.toList.mkString("\n")}")
+      handleResponse[UserBalance](
+        responseFuture = jobcoinWebService.checkBalance(depositAddress),
+        success = balance => {
+          val deposit = balance.balance
+          if (deposit > 0) {
+            log.info(s"Received balance of $deposit to $depositAddress")
+            context become attemptTransferToHouse
+            val attemptTransferMsg = AttemptTransferToHouse(deposit)
+            self ! attemptTransferMsg
+            timers.cancelAll()
+            timers.startPeriodicTimer(AttemptTransferToHouse, attemptTransferMsg, DELAY)
           }
+          failures = 0
+        },
+        failure = errs => {
+          log.info(s"Unable to fetch due to errors: ${errs.toList.mkString("\n")}")
         }
-
-      }
+      )
   }
 
   def attemptTransferToHouse: Receive = {
-    case AttemptTransferToHouse(amount) => {
-      jobcoinWebService
-        .transfer(depositAddress, MixingActor.HOUSE_ADDRESS, amount)
-        .onComplete(t => {
-          //TODO generalize
-          t.toEither.leftMap(_.toString).toValidatedNel.andThen(identity) match {
-            case Validated.Valid(_) =>
-              log.info(s"$amount transferred successfully to house address")
-              log.info(s"sending ${MixingActor.DepositReceived(amount, safeAddresses)} to ${context.parent}")
-              context.parent ! MixingActor.DepositReceived(amount, safeAddresses)
-              timers.cancelAll()
-            case Invalid(err) => log.info(s"Unable to fetch due to errors: ${err.toList.mkString("\n")}")
-          }
-        })
-    }
-    case TransferToSafeAddressBehavior(address, amount) =>
-      context become attemptTransferToSafeAddress
-      self ! AttemptTransferToSafeAddress(address, amount)
-      timers.startPeriodicTimer(AttemptTransferToSafeAddress, AttemptTransferToSafeAddress(address, amount), DELAY)
+    case AttemptTransferToHouse(amount) =>
+      handleResponse[Unit](
+        responseFuture = jobcoinWebService.transfer(depositAddress, MixingActor.HOUSE_ADDRESS, amount),
+        success = _ => {
+          log.info(s"$amount transferred successfully to house address")
+          context.parent ! MixingActor.DepositReceived(amount, safeAddresses)
+          timers.cancelAll()
+          context become attemptTransferToSafeAddress
+          failures = 0
+        }
+      )
   }
 
   def attemptTransferToSafeAddress: Receive = {
     case AttemptTransferToSafeAddress(safeAddress, amount) =>
-      //TODO handle
-      jobcoinWebService.transfer(MixingActor.HOUSE_ADDRESS, safeAddress, amount)
+      handleResponse[Unit](
+        responseFuture = jobcoinWebService.transfer(MixingActor.HOUSE_ADDRESS, safeAddress, amount),
+        success = _ => {
+          timers.cancelAll()
+          failures = 0
+//          context.parent ! MixingActor.ProcessedDepositSuccess() //TODO
+        },
+        failure = _ => {
+          timers.startPeriodicTimer(AttemptTransferToSafeAddress, AttemptTransferToSafeAddress(safeAddress, amount), DELAY)
+        }
+      )
   }
 
   override def receive: Receive = {
@@ -110,7 +131,8 @@ class TumblingTransactionActor(
 }
 
 case object TumblingTransactionActor {
-  private val FAILURE_THRESHOLD = Option(100)
+  //TODO after several unexpected failures. Persist this transaction to revive at a later time.
+  private val FAILURE_THRESHOLD = Option(20)
 
   def props(safeAddresses: List[String], depositAddress: String, jobcoinClient: JobcoinWebService): Props =
     Props(new TumblingTransactionActor(safeAddresses, depositAddress, jobcoinClient))
@@ -122,10 +144,6 @@ case object TumblingTransactionActor {
   val DELAY: FiniteDuration = 30 seconds
 
   case object Initialize
-
-  case class TransferToHouseBehavior(amount: Double)
-
-  case class TransferToSafeAddressBehavior(address: String, amount: Double)
 
   case class AttemptTransferToHouse(amount: Double)
 
