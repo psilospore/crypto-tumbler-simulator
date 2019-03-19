@@ -1,4 +1,5 @@
 package com.gemini.jobcoin
+
 import java.util.UUID
 
 import akka.actor.{Actor, ActorRef, Props, Timers}
@@ -6,7 +7,18 @@ import akka.event.Logging
 
 import scala.concurrent.duration._
 import TumblingTransactionActor._
-import com.gemini.jobcoin.JobcoinClient
+import cats.syntax.validated
+import cats.instances.future
+import cats.syntax.try_
+import cats.data.{Validated, ValidatedNel}
+import cats.syntax.either._
+import cats.syntax.option._
+import cats.syntax.validated._
+import cats.data.Validated._
+import cats.syntax.nonEmptyTraverse._
+import cats.instances.list._
+import cats.instances.either._
+import cats.instances.option._
 
 /**
   * Represents a request to tumble funds. Owned and managed by the MixingActor.
@@ -19,45 +31,80 @@ import com.gemini.jobcoin.JobcoinClient
   * 4) Finished transaction: PoisonPilled
   *
   * TODO params documentation
-  * TODO probably no state? State should change and in redesign it doesn't.
   */
-class TumblingTransactionActor(val state: State, jobcoinClient: JobcoinClient) extends Actor with Timers {
+class TumblingTransactionActor(
+  safeAddresses: List[String],
+  depositAddress: String,
+  jobcoinWebService: JobcoinWebService
+) extends Actor
+    with Timers {
   import TumblingTransactionActor._
+  import context.dispatcher
 
-  val log = Logging(context.system, this)
+  val log      = Logging(context.system, this)
   val failures = 0
 
   def waitingForDeposit: Receive = {
     case CheckBalance =>
+      log.info(s"Checking balance")
       for {
-        balance <- jobcoinClient.checkBalance(state.depositAddress)
+        balanceValidation <- jobcoinWebService.checkBalance(depositAddress)
       } yield {
-        val deposit = balance.balance
-        if (deposit > 0) {
-          self ! TransferToHouse
-        } else {
-          timers.startSingleTimer(CheckBalance, CheckBalance, CHECK_BALANCE_DELAY)
+        balanceValidation match {
+          case Valid(balance) =>
+            val deposit = balance.balance
+            if (deposit > 0) {
+              log.info(s"Received balance of $deposit to $depositAddress")
+              context become attemptTransferToHouse
+              val attemptTransferMsg = AttemptTransferToHouse(deposit)
+              self ! attemptTransferMsg
+              timers.cancelAll()
+              timers.startPeriodicTimer(AttemptTransferToHouse, attemptTransferMsg, DELAY)
+            }
+          case Invalid(err) => {
+            log.info(s"Unable to fetch due to errors: ${err.toList.mkString("\n")}")
+          }
         }
+
       }
   }
 
   def attemptTransferToHouse: Receive = {
-    case AttemptTransferToHouse => jobcoinClient //TODO
+    case AttemptTransferToHouse(amount) => {
+      jobcoinWebService
+        .transfer(depositAddress, MixingActor.HOUSE_ADDRESS, amount)
+        .onComplete(t => {
+          //TODO generalize
+          t.toEither.leftMap(_.toString).toValidatedNel.andThen(identity) match {
+            case Validated.Valid(_) =>
+              log.info(s"$amount transferred successfully to house address")
+              log.info(s"sending ${MixingActor.DepositReceived(amount, safeAddresses)} to ${context.parent}")
+              context.parent ! MixingActor.DepositReceived(amount, safeAddresses)
+              timers.cancelAll()
+            case Invalid(err) => log.info(s"Unable to fetch due to errors: ${err.toList.mkString("\n")}")
+          }
+        })
+    }
+    case TransferToSafeAddressBehavior(address, amount) =>
+      context become attemptTransferToSafeAddress
+      self ! AttemptTransferToSafeAddress(address, amount)
+      timers.startPeriodicTimer(AttemptTransferToSafeAddress, AttemptTransferToSafeAddress(address, amount), DELAY)
   }
 
   def attemptTransferToSafeAddress: Receive = {
-    case AttemptTransferToSafeAddress => jobcoinClient
+    case AttemptTransferToSafeAddress(safeAddress, amount) =>
+      //TODO handle
+      jobcoinWebService.transfer(MixingActor.HOUSE_ADDRESS, safeAddress, amount)
   }
-    override def receive: Receive = {
-    case WaitForBalance        => context become waitingForDeposit
-    case TransferToHouse       => {
-      context become attemptTransferToHouse
-      timers.startPeriodicTimer(AttemptTransferToHouse, AttemptTransferToHouse, 2 minute)
+
+  override def receive: Receive = {
+    case Initialize => {
+      println("hi")
+      context become waitingForDeposit
+      self ! CheckBalance
+      timers.startPeriodicTimer(CheckBalance, CheckBalance, DELAY)
     }
-    case TransferToSafeAddress(address) => {
-      context become attemptTransferToSafeAddress
-      timers.startPeriodicTimer(AttemptTransferToSafeAddress, AttemptTransferToSafeAddress(address), 2 minute)
-    }
+
   }
 
 }
@@ -65,26 +112,23 @@ class TumblingTransactionActor(val state: State, jobcoinClient: JobcoinClient) e
 case object TumblingTransactionActor {
   private val FAILURE_THRESHOLD = Option(100)
 
-  def props(state: State, jobcoinClient: JobcoinClient, mixingActor: ActorRef): Props =
-    Props(new TumblingTransactionActor(state, jobcoinClient))
-
-  case class State(
-    name: Option[String] = None,
-    addresses: List[String],
-    depositAddress: String
-  )
+  def props(safeAddresses: List[String], depositAddress: String, jobcoinClient: JobcoinWebService): Props =
+    Props(new TumblingTransactionActor(safeAddresses, depositAddress, jobcoinClient))
 
   case class WithdrawFromHouse(destination: String, amount: Double)
 
   private case object CheckBalance
 
-  val CHECK_BALANCE_DELAY: FiniteDuration = 1 minute
+  val DELAY: FiniteDuration = 30 seconds
 
-  case object WaitForBalance
-  case object TransferToHouse
-  case class TransferToSafeAddress(address: String)
+  case object Initialize
 
-  case object AttemptTransferToHouse
-  case class AttemptTransferToSafeAddress(address: String)
+  case class TransferToHouseBehavior(amount: Double)
+
+  case class TransferToSafeAddressBehavior(address: String, amount: Double)
+
+  case class AttemptTransferToHouse(amount: Double)
+
+  case class AttemptTransferToSafeAddress(address: String, amount: Double)
 
 }

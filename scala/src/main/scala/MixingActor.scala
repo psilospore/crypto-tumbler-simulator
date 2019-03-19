@@ -63,7 +63,8 @@ class MixingActor(var state: State) extends Actor with Timers {
             (rnd.nextInt(60) + 20) / 100.0 * deposit.remainder
           }
 
-        deposit.tumblingTransactionActor ! TumblingTransactionActor.WithdrawFromHouse(deposit.unusedAddresses.head, amount)
+        deposit.tumblingTransactionActor ! TumblingTransactionActor
+          .WithdrawFromHouse(deposit.unusedAddresses.head, amount)
         log.info("Attempting deposit to safe address") //TODO
       })
       state = state.copy(
@@ -113,6 +114,8 @@ object MixingActor {
     unusedAddresses: List[String],
     addedToQueue: Instant
   )
+
+  case class CreateTumblingTransaction(addresses: List[String], depositAddress: String)
 
   //Deposit received in house address
   case class DepositReceived(deposit: Double, addresses: List[String])

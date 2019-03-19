@@ -7,6 +7,7 @@ scalaVersion := "2.12.5"
 trapExit := false
 
 libraryDependencies += "org.scalatest" %% "scalatest" % "3.0.5" % "test"
+libraryDependencies += "org.scalamock" %% "scalamock" % "4.1.0" % "test"
 libraryDependencies += "com.typesafe" % "config" % "1.3.2"
 libraryDependencies += "com.typesafe.play" %% "play-ahc-ws-standalone" % "2.0.0-M1"
 libraryDependencies += "com.typesafe.play" %% "play-ws-standalone-json" % "2.0.0-M1"

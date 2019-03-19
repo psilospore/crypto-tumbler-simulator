@@ -12,14 +12,12 @@ import scala.async.Async._
 import scala.concurrent.ExecutionContext.Implicits._
 import scala.concurrent.Future
 import JobcoinWebService._
-
-import cats.data.ValidatedNel
+import cats.data.{NonEmptyList, ValidatedNel}
 import cats.syntax.either._
 import cats.syntax.option._
 import cats.syntax.validated._
 import cats.data.Validated._
 import cats.syntax.nonEmptyTraverse._
-
 import cats.instances.list._
 import cats.instances.either._
 import cats.instances.option._
@@ -33,7 +31,7 @@ import cats.instances.option._
   */
 trait JobcoinWebService {
   def checkBalance(address: String): Future[ValidatedNel[Error, UserBalance]]
-  def transfer(sourceAddress: String, destinationAddress: String): Future[ValidatedNel[Error, Unit]]
+  def transfer(sourceAddress: String, destinationAddress: String, amount: Double): Future[ValidatedNel[Error, Unit]]
 }
 
 class JobcoinWebServiceImpl(implicit materializer: Materializer, config: Config) extends JobcoinWebService {
@@ -53,7 +51,11 @@ class JobcoinWebServiceImpl(implicit materializer: Materializer, config: Config)
       .toValidated
   }
 
-  override def transfer(sourceAddress: String, destinationAddress: String): Future[ValidatedNel[Error, Unit]] = async {
+  override def transfer(
+    sourceAddress: String,
+    destinationAddress: String,
+    amount: Double
+  ): Future[ValidatedNel[Error, Unit]] = async {
     val response = await {
       wsClient
         .url("https://jsonplaceholder.typicode.com/posts/1")
@@ -95,11 +97,12 @@ object JobcoinWebService {
     * Extension methods for Play's JsResult.
     */
   implicit class JsResultExtension[A](val jsResult: JsResult[A]) extends AnyVal {
+
     /**
       * Converts to ValidationNel.
       */
     def toValidated: ValidatedNel[Error, A] =
       jsResult.asEither.toValidatedNel
-        .leftMap(_.map(_.toString))
+        .leftMap((s: NonEmptyList[_]) => s.map(_.toString))
   }
 }

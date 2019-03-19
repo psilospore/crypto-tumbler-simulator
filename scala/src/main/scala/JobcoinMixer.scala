@@ -2,7 +2,7 @@ package com.gemini.jobcoin
 
 import java.util.UUID
 
-import akka.actor.ActorSystem
+import akka.actor.{ActorSystem, Props}
 import akka.stream.ActorMaterializer
 import com.typesafe.config.ConfigFactory
 
@@ -16,11 +16,14 @@ object JobcoinMixer {
   object CompletedException extends Exception {}
   private implicit lazy val actorSystem  = ActorSystem()
   private implicit lazy val materializer = ActorMaterializer()
-  private lazy val config                = ConfigFactory.load()
-  lazy val client                        = new JobcoinClient(config)
+  private implicit lazy val config       = ConfigFactory.load()
+  lazy val client                        = new JobcoinWebServiceImpl
 
+  private val MINIMUM_RECOMMENDED_ADDRESSES = 4
+
+  //TODO validate addresses?
   def main(args: Array[String]): Unit = {
-    client.testGet().map(response => println(s"Response:\n$response"))
+    val mixingActor = actorSystem.actorOf(Props[MixingActor], name = "mixingactor")
 
     try {
       while (true) {
@@ -29,14 +32,22 @@ object JobcoinMixer {
 
         if (line == "quit") throw CompletedException
 
-        val addresses = line.split(",")
+        val safeAddresses = line.split(",")
         if (line == "") {
           println(s"You must specify empty addresses to mix into!\n$helpText")
-        } else {
+        } else if (safeAddresses.size == 1) {
+          if (safeAddresses.size < MINIMUM_RECOMMENDED_ADDRESSES) {
+            println(s"Warning we recommend at least $MINIMUM_RECOMMENDED_ADDRESSES")
+          }
           val depositAddress = UUID.randomUUID()
           println(
-            s"You may now send Jobcoins to address $depositAddress. They will be mixed and sent to your destination addresses."
+            s"""
+               |You may now send Jobcoins to address $depositAddress.
+               |They will be mixed and sent to your destination addresses.
+               |
+               """.stripMargin
           )
+          mixingActor ! MixingActor.CreateTumblingTransaction(safeAddresses.toList, depositAddress.toString)
         }
       }
     } catch {
@@ -47,7 +58,10 @@ object JobcoinMixer {
   }
 
   val prompt: String =
-    "Please enter a comma-separated list of new, unused Jobcoin addresses where your mixed Jobcoins will be sent."
+    s"""
+      |Please enter a comma-separated list of new, unused Jobcoin addresses where your mixed Jobcoins will be sent.
+      |We recommend a minimum of $MINIMUM_RECOMMENDED_ADDRESSES addresses. The less addresses given the easier it is to track.
+      |""".stripMargin
   val helpText: String =
     """
       |Jobcoin Mixer
