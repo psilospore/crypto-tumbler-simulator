@@ -2,7 +2,6 @@ package com.gemini.jobcoin
 import java.time.Instant
 import java.util.UUID
 
-import MixingActor.State
 import akka.actor.{Actor, ActorRef, PoisonPill, Props, Timers}
 import akka.event.Logging
 
@@ -11,91 +10,80 @@ import scala.concurrent.duration._
 import scala.util.Random
 
 /**
-  * Sends only once 20 users have mixed in.
+  * Sends only once  users have mixed in.
   * Most of the business and mixing logic is here.
   *
-  * There's solutions to avoid timing attacks.
-  * Example if I just send as they come in and out. Someone could narrow in on transaction that happened at that period.
-  * If there's a delay and it's constant that's just as easy to track.
   *
-  * If I avoid
+  * TODO I would potentially have something else transfer the fee I've collected.
   * @param state
   */
-class MixingActor(var state: State, jobcoinWebService: JobcoinWebService) extends Actor with Timers {
+class MixingActor(
+  jobcoinWebService: JobcoinWebService
+) extends Actor
+    with Timers {
+
   import MixingActor._
   val log = Logging(context.system, this)
 
-  val transactionActors: mutable.Set[ActorRef] = mutable.Set()
-  private val rnd                              = Random
+  val transactionActors: mutable.Set[ActorRef]                   = mutable.Set()
+  private val rnd                                                = Random
+  var depositsInProcess: mutable.PriorityQueue[DepositInProcess] = mutable.PriorityQueue[DepositInProcess]()
 
   timers.startPeriodicTimer(ProcessDeposit, ProcessDeposit, PROCESS_DELAY)
 
   override def receive: Receive = {
+
     case CreateTransaction(safeAddresses, depositAddress) =>
       val newTransactionActor = context.actorOf(
         TransactionActor.props(safeAddresses, depositAddress, jobcoinWebService)
       )
       transactionActors.add(newTransactionActor)
       newTransactionActor ! TransactionActor.Initialize
+
     case DepositReceived(deposit, addresses) =>
-      val fee             = deposit * FEE
-      val amountToDeposit = deposit - fee
-      //TODO store the fee we've collected so far.
-      state.depositsInProcess += DepositInProcess(sender(), amountToDeposit, addresses)
-      log.info(s"Queued ${sender()} in ${state.depositsInProcess}")
-    case ProcessDeposit if state.depositsInProcess.size > MINIMUM_PAID_ACTORS_FOR_PAYOUT =>
-      //TODO this is bad I can easily overload the tumbler.
-      // One strategy is to keep this same logic but do it for a high percentage every increment.
+      val randomizedFee   = deposit * (rnd.nextInt(31) / 100D)
+      val amountToDeposit = deposit - randomizedFee
+      depositsInProcess += DepositInProcess(sender(), amountToDeposit, addresses)
+      log.info(s"Charged randomized fee of $randomizedFee from total deposit of $amountToDeposit")
+      log.info(s"Queued ${sender()} in $depositsInProcess")
 
-      //TODO here's one good one. If there's at least 20 users. Leave 10 users in the queue, and get the rest out.
-      //Send a message to their actors, but schedule it for a delay. The delays are randomized for each actor.
-      //Now at this point
-      //This solution also prevents users never receiving their deposits if there's at least 20 people before their transaction.
-      //There's always a batch of 10 transactions to randomize.
-      val prioritizedRandomIndex   = rnd.nextInt(MINIMUM_PAID_ACTORS_FOR_PAYOUT)
-      val indexedDepositsInProcess = state.depositsInProcess.zipWithIndex
-      val prioritizedRandomDeposit = indexedDepositsInProcess
-        .find(_._2 == prioritizedRandomIndex)
+    case ProcessDeposit if depositsInProcess.size > MINIMUM_PAID_ACTORS_FOR_PAYOUT =>
+      //Fetch up until the last 10
+      val cutoff                                      = depositsInProcess.size - 1 - MINIMUM_IN_QUEUE
+      val (toProcessIndexed, newPriorityQueueIndexed) = depositsInProcess.zipWithIndex.partition(_._2 <= cutoff)
+
+      depositsInProcess = newPriorityQueueIndexed.map(_._1)
+      toProcessIndexed
         .map(_._1)
+        .foreach(deposit => {
+          val amount =
+            if (deposit.unusedAddresses.size == 1)
+              deposit.remainder
+            else {
+              //Random percentage of remainder between 20% and 79%
+              (rnd.nextInt(60) + 20) / 100.0 * deposit.remainder
+            }
+          deposit.transactionActorActor ! TransactionActor
+            .WithdrawFromHouse(deposit.unusedAddresses.head, amount)
+          log.info("Attempting deposit to safe address")
+        })
 
-      prioritizedRandomDeposit.fold({
-        log.error("Unexpected")
-      })(deposit => {
-        val amount =
-          if (deposit.unusedAddresses.size == 1)
-            deposit.remainder
-          else {
-            //Random percentage of remainder between 20% and 79%
-            (rnd.nextInt(60) + 20) / 100.0 * deposit.remainder
-          }
-
-        deposit.transactionActorActor ! TransactionActor
-          .WithdrawFromHouse(deposit.unusedAddresses.head, amount)
-        log.info("Attempting deposit to safe address") //TODO
-      })
-      state = state.copy(
-        depositsInProcess = indexedDepositsInProcess
-          .filterNot(_._2 == prioritizedRandomIndex)
-          .map(_._1)
-      )
-    //TODO send prioritizedRandomDeposit.
-    // Service sends success or failure back.
-    // On success if there is no more addresses to process then don't add it back to the queue.
-    // Otherwise pop back in queue
     case ProcessedDepositFailure(depositInProcess) =>
       //Fatal lost transaction
       //TODO persist in case we want to recover later
       log.error(s"Unable to process $depositInProcess")
+
     case ProcessedDepositSuccess(depositInProcess, amount, address) =>
       val newDepositInProcess = depositInProcess.copy(
         remainder = depositInProcess.remainder - amount,
         unusedAddresses = depositInProcess.unusedAddresses.filterNot(_ == address)
       )
       if (newDepositInProcess.unusedAddresses.nonEmpty) {
-        state.depositsInProcess.enqueue(depositInProcess)
+        depositsInProcess.enqueue(depositInProcess)
       } else {
         depositInProcess.transactionActorActor ! PoisonPill //TODO this is how you kill again right?
       }
+
     //In case of shutdown payout remaining. Could also be used for testing.
     case ForceFinishPayout => () //TODO maybe I could do this if I have to shut down or maybe for testing
   }
@@ -103,19 +91,16 @@ class MixingActor(var state: State, jobcoinWebService: JobcoinWebService) extend
 
 object MixingActor {
 
-  def props(jobcoinWebService: JobcoinWebService) = Props(new MixingActor(State(), jobcoinWebService))
+  def props(jobcoinWebService: JobcoinWebService) = Props(new MixingActor(jobcoinWebService))
 
-  private val MINIMUM_PAID_ACTORS_FOR_PAYOUT = 20
-  private val PROCESS_DELAY: FiniteDuration  = 1 minute
-  private val FEE: Double                    = 0.03
-  val HOUSE_ADDRESS: String                  = UUID.randomUUID.toString //TODO get from config
+  //These values could slide depending on activity
+  private val MINIMUM_PAID_ACTORS_FOR_PAYOUT = 10
+  private val MINIMUM_IN_QUEUE               = MINIMUM_PAID_ACTORS_FOR_PAYOUT / 2
+
+  private val PROCESS_DELAY: FiniteDuration = 30 seconds
+  val HOUSE_ADDRESS: String                 = UUID.randomUUID.toString //TODO get from config
 
   implicit val depositInProcessOrd: Ordering[DepositInProcess] = Ordering.by[DepositInProcess, Instant](_.addedToQueue)
-
-  //TODO maybe remove state or move failure in? TODO create transition state.
-  case class State(
-    depositsInProcess: mutable.PriorityQueue[DepositInProcess] = mutable.PriorityQueue[DepositInProcess]()
-  )
 
   //TODO rename this is something else now. MixingTransactionState. MixingTransactionInProcessState
   case class DepositInProcess(
@@ -132,7 +117,7 @@ object MixingActor {
   case class DepositReceived(deposit: Double, addresses: List[String])
 
   case object ProcessDeposit
-  case object ForceFinishPayout
+  case class ForceFinishPayout(withRandomizedDelay: Boolean = true)
 
   case class ProcessedDepositSuccess(depositInProcess: DepositInProcess, amount: Double, address: String)
   case class ProcessedDepositFailure(depositInProcess: DepositInProcess)
