@@ -1,11 +1,16 @@
 # Jobcoin Tumbler
 
 A simple tumbler that runs on Jobcoin.
+Charges a randomized fee of up to 3%.
 
 ## Developer Notes
 
 I've attempted to explain any non-common patterns, or usages of libraries outside of the provided libraries.
 Such as my comment on extension methods or on Cats.
+
+I also had to cut myself off at some point.
+There are explanations of things I would do documented in the readme here
+and in the codebase.
 
 ### Run
 `sbt run`
@@ -19,7 +24,9 @@ There's several different angles for vulnerabilities on mixing.
 I will attempt to document some attacks, safety mechanisms I've added, and unaddressed
 vulnerabilities.
 
-Feel free to sklp this and skip to implementation.
+Feel free to skip this section since it is a bit long.
+However it does explain the following section and why I made some
+of those decisions. 
 
 ### Examining the ledger
 
@@ -84,4 +91,3 @@ Right now I'm simply attempting a constant amount of times and just counting fai
 ### Better tests
 Test JobcoinWebService
 
-### Randomize the fee

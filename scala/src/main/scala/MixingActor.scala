@@ -1,6 +1,7 @@
 package com.gemini.jobcoin
 import java.time.Instant
 import java.util.UUID
+import java.util.concurrent.TimeUnit
 
 import akka.actor.{Actor, ActorRef, PoisonPill, Props, Timers}
 import akka.event.Logging
@@ -21,8 +22,9 @@ class MixingActor(
   jobcoinWebService: JobcoinWebService
 ) extends Actor
     with Timers {
-
   import MixingActor._
+  import context.dispatcher
+
   val log = Logging(context.system, this)
 
   val transactionActors: mutable.Set[ActorRef]                   = mutable.Set()
@@ -41,10 +43,10 @@ class MixingActor(
       newTransactionActor ! TransactionActor.Initialize
 
     case DepositReceived(deposit, addresses) =>
-      val randomizedFee   = deposit * (rnd.nextInt(31) / 100D)
+      val randomizedFee   = deposit * (rnd.nextInt(31) / 1000D)
       val amountToDeposit = deposit - randomizedFee
       depositsInProcess += DepositInProcess(sender(), amountToDeposit, addresses)
-      log.info(s"Charged randomized fee of $randomizedFee from total deposit of $amountToDeposit")
+      log.info(s"Charged randomized fee of $randomizedFee from total deposit of $deposit")
       log.info(s"Queued ${sender()} in $depositsInProcess")
 
     case ProcessDeposit if depositsInProcess.size > MINIMUM_PAID_ACTORS_FOR_PAYOUT =>
@@ -63,29 +65,36 @@ class MixingActor(
               //Random percentage of remainder between 20% and 79%
               (rnd.nextInt(60) + 20) / 100.0 * deposit.remainder
             }
-          deposit.transactionActorActor ! TransactionActor
-            .WithdrawFromHouse(deposit.unusedAddresses.head, amount)
-          log.info("Attempting deposit to safe address")
-        })
 
-    case ProcessedDepositFailure(depositInProcess) =>
-      //Fatal lost transaction
-      //TODO persist in case we want to recover later
-      log.error(s"Unable to process $depositInProcess")
+          val randomDuration = FiniteDuration.apply(Random.nextInt(100), TimeUnit.SECONDS)
+          context.system.scheduler.scheduleOnce(
+            randomDuration,
+            deposit.transactionActorActor,
+            TransactionActor.WithdrawFromHouse(deposit.unusedAddresses.head, amount)
+          )
+          log.info(s"Attempting deposit of $amount to safe address ${deposit.unusedAddresses.head}")
+        })
 
     case ProcessedDepositSuccess(depositInProcess, amount, address) =>
       val newDepositInProcess = depositInProcess.copy(
         remainder = depositInProcess.remainder - amount,
         unusedAddresses = depositInProcess.unusedAddresses.filterNot(_ == address)
       )
+      log.info(s"Successfully deposited $amount with ${depositInProcess.remainder} remaining to safe address $address")
       if (newDepositInProcess.unusedAddresses.nonEmpty) {
         depositsInProcess.enqueue(depositInProcess)
       } else {
-        depositInProcess.transactionActorActor ! PoisonPill //TODO this is how you kill again right?
+        log.info(s"Done processing transaction $depositInProcess")
+        depositInProcess.transactionActorActor ! PoisonPill
       }
 
-    //In case of shutdown payout remaining. Could also be used for testing.
-    case ForceFinishPayout => () //TODO maybe I could do this if I have to shut down or maybe for testing
+    case ProcessedDepositFailure(depositInProcess) =>
+      //Fatal lost transaction
+      //TODO persist in case we want to recover later
+      log.error(s"Unable to process $depositInProcess")
+
+    //TODO in case of shutdown force payout
+    case ForceFinishPayout(withRandomizedDelay) => //TODO
   }
 }
 
@@ -98,7 +107,7 @@ object MixingActor {
   private val MINIMUM_IN_QUEUE               = MINIMUM_PAID_ACTORS_FOR_PAYOUT / 2
 
   private val PROCESS_DELAY: FiniteDuration = 30 seconds
-  val HOUSE_ADDRESS: String                 = UUID.randomUUID.toString //TODO get from config
+  val HOUSE_ADDRESS: String                 = s"HOUSE ADDRESS" //In reality we would get this from a configuration
 
   implicit val depositInProcessOrd: Ordering[DepositInProcess] = Ordering.by[DepositInProcess, Instant](_.addedToQueue)
 

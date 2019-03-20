@@ -16,11 +16,11 @@ object JobcoinMixer {
   private implicit lazy val materializer = ActorMaterializer()
   private implicit lazy val config       = ConfigFactory.load()
   lazy val client                        = new JobcoinWebServiceImpl
+  lazy val mixingActor = actorSystem.actorOf(MixingActor.props(client), name = "mixingactor")
 
   private val MINIMUM_RECOMMENDED_ADDRESSES = 4
 
   def main(args: Array[String]): Unit = {
-    val mixingActor = actorSystem.actorOf(MixingActor.props(client), name = "mixingactor")
 
     try {
       while (true) {
@@ -34,7 +34,7 @@ object JobcoinMixer {
         if (line == "") {
           println(s"You must specify empty addresses to mix into!\n$helpText")
         } else if (safeAddresses.nonEmpty) {
-          if (safeAddresses.size < MINIMUM_RECOMMENDED_ADDRESSES) {
+          if (safeAddresses.length < MINIMUM_RECOMMENDED_ADDRESSES) {
             println(s"Warning we recommend at least $MINIMUM_RECOMMENDED_ADDRESSES")
           }
           val depositAddress = UUID.randomUUID()
@@ -79,4 +79,5 @@ object JobcoinMixer {
       |        Similar to force-payout but slightly safer since there is a delay and randomized transactions.
       |
     """.stripMargin
+
 }
