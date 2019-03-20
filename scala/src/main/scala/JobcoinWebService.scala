@@ -85,7 +85,7 @@ class JobcoinWebServiceImpl(implicit materializer: Materializer, config: Config)
         if(res.status.contains("OK"))
           ().validNel[String]
         else
-          "Status".invalidNel[Unit]
+          s"Status is not ok $res".invalidNel[Unit]
       )
   }
 }

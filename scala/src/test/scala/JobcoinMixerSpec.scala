@@ -4,6 +4,8 @@ import org.scalatest._
 import java.io.{ByteArrayOutputStream, ByteArrayInputStream}
 import java.nio.charset.StandardCharsets
 
+//TODO fix this
+//For the purpose of time I did not work on this. There are some tests in ActorTest.
 class MixerTests extends FlatSpec with Matchers {
   "Main method" should "print the help text when no args are given" in {
     val inputText   = "\nquit\n"

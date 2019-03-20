@@ -14,12 +14,14 @@ import cats.data.{NonEmptyList, Validated, ValidatedNel}
 import cats.syntax.either._
 import cats.syntax.option._
 import cats.syntax.validated._
+import cats.syntax.try_._
+import cats.instances.try_
 import cats.data.Validated._
 import cats.syntax.nonEmptyTraverse._
 import cats.instances.list._
 import cats.instances.either._
 import cats.instances.option._
-import com.gemini.jobcoin.JobcoinWebService.UserBalance
+import com.gemini.jobcoin.JobcoinWebService.{UserBalance, Error}
 import com.gemini.jobcoin.MixingActor.DepositInProcess
 
 import scala.concurrent.Future
@@ -108,24 +110,22 @@ class TransactionActor(
 
   /**
     * Handles response from  JobcoinWebservice
-    * TODO this doesn't handle if the future fails
     */
   private def handleResponse[R](
-    responseFuture: Future[ValidatedNel[JobcoinWebService.Error, R]],
-    success: R => Any,
-    failure: NonEmptyList[JobcoinWebService.Error] => Any = _ => ()
+    responseFuture: Future[ValidatedNel[Error, R]],
+    success: R => Unit,
+    failure: NonEmptyList[Error] => Any = _ => ()
   ): Unit =
-    for {
-      responseValidated <- responseFuture
-    } {
-      responseValidated match {
-        case Valid(response) => success(response)
+    responseFuture.onComplete(futureTry => {
+      val futureValidated: ValidatedNel[String, ValidatedNel[String, R]] = futureTry.toEither.leftMap(_.getMessage).toValidatedNel
+      futureValidated.andThen {
+        case Valid(response) => success(response).validNel
         case Invalid(errs) =>
           log.info(s"Unable to fetch due to errors: ${errs.toList.mkString("\n")}")
           failures += 1
-          failure(errs)
+          failure(errs).invalidNel
       }
-    }
+    })
 }
 
 case object TransactionActor {
@@ -135,8 +135,6 @@ case object TransactionActor {
   //TODO maybe remove state or move failure in? TODO create transition state.
   def props(safeAddresses: List[String], depositAddress: String, jobcoinClient: JobcoinWebService): Props =
     Props(new TransactionActor(safeAddresses, depositAddress, jobcoinClient))
-
-  case class WithdrawFromHouse(destination: String, amount: Double)
 
   private case object CheckBalance
 

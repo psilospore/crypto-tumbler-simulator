@@ -15,8 +15,17 @@ and in the codebase.
 ### Run
 `sbt run`
 
+Displays a console.
+
+//Note
+
 ### Test
 `sbt test`
+
+### Console
+`sbt console`
+
+Won't recommend using
 
 ## Mixing
 

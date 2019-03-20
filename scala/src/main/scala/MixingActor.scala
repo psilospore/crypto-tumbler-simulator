@@ -47,9 +47,9 @@ class MixingActor(
       val amountToDeposit = deposit - randomizedFee
       depositsInProcess += DepositInProcess(sender(), amountToDeposit, addresses)
       log.info(s"Charged randomized fee of $randomizedFee from total deposit of $deposit")
-      log.info(s"Queued ${sender()} in $depositsInProcess")
+      log.info(s"Queued ${sender()}")
 
-    case ProcessDeposit if depositsInProcess.size > MINIMUM_PAID_ACTORS_FOR_PAYOUT =>
+    case ProcessDeposit if depositsInProcess.size >= MINIMUM_PAID_ACTORS_FOR_PAYOUT =>
       //Fetch up until the last 10
       val cutoff                                      = depositsInProcess.size - 1 - MINIMUM_IN_QUEUE
       val (toProcessIndexed, newPriorityQueueIndexed) = depositsInProcess.zipWithIndex.partition(_._2 <= cutoff)
@@ -66,11 +66,10 @@ class MixingActor(
               (rnd.nextInt(60) + 20) / 100.0 * deposit.remainder
             }
 
-          val randomDuration = FiniteDuration.apply(Random.nextInt(100), TimeUnit.SECONDS)
           context.system.scheduler.scheduleOnce(
-            randomDuration,
+            randomDuration(),
             deposit.transactionActorActor,
-            TransactionActor.WithdrawFromHouse(deposit.unusedAddresses.head, amount)
+            TransactionActor.AttemptTransferToSafeAddress(deposit, deposit.unusedAddresses.head, amount)
           )
           log.info(s"Attempting deposit of $amount to safe address ${deposit.unusedAddresses.head}")
         })
@@ -108,6 +107,8 @@ object MixingActor {
 
   private val PROCESS_DELAY: FiniteDuration = 30 seconds
   val HOUSE_ADDRESS: String                 = s"HOUSE ADDRESS" //In reality we would get this from a configuration
+
+  def randomDuration(): FiniteDuration = FiniteDuration.apply(Random.nextInt(30), TimeUnit.SECONDS)
 
   implicit val depositInProcessOrd: Ordering[DepositInProcess] = Ordering.by[DepositInProcess, Instant](_.addedToQueue)
 
