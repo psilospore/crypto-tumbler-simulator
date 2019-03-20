@@ -6,6 +6,7 @@ import akka.stream.Materializer
 import com.typesafe.config.Config
 import play.api.libs.json._
 import play.api.libs.ws.JsonBodyReadables._
+import play.api.libs.ws.JsonBodyWritables._
 import play.api.libs.ws.ahc._
 
 import scala.async.Async._
@@ -21,6 +22,13 @@ import cats.syntax.nonEmptyTraverse._
 import cats.instances.list._
 import cats.instances.either._
 import cats.instances.option._
+import play.api.libs.json._
+import play.api.libs.json.Reads._
+import play.api.libs.functional.syntax._
+
+
+import play.api.libs.ws.JsonBodyReadables._
+import play.api.libs.ws.JsonBodyWritables._
 
 /**
   * Web Service to interact with Jobcoin API.
@@ -35,13 +43,14 @@ trait JobcoinWebService {
 }
 
 class JobcoinWebServiceImpl(implicit materializer: Materializer, config: Config) extends JobcoinWebService {
-  private val wsClient        = StandaloneAhcWSClient()
-  private val apiAddressesUrl = config.getString("jobcoin.apiAddressesUrl")
+  private val wsClient          = StandaloneAhcWSClient()
+  private val apiAddressesUrl   = config.getString("jobcoin.apiAddressesUrl")
+  private val apiTransactionUrl = config.getString("jobcoin.apiTransactionsUrl")
 
   def checkBalance(address: String): Future[ValidatedNel[Error, UserBalance]] = async {
     val response = await {
       wsClient
-        .url("https://jsonplaceholder.typicode.com/posts/1")
+        .url(s"$apiAddressesUrl/$address")
         .get()
     }
 
@@ -58,39 +67,60 @@ class JobcoinWebServiceImpl(implicit materializer: Materializer, config: Config)
   ): Future[ValidatedNel[Error, Unit]] = async {
     val response = await {
       wsClient
-        .url("https://jsonplaceholder.typicode.com/posts/1")
-        .get()
+        .url(s"$apiTransactionUrl")
+        .post(
+          Json.obj(
+            "fromAddress" -> sourceAddress,
+            "toAddress"   -> destinationAddress,
+            "amount"      -> amount
+          )
+        )
     }
 
     response
       .body[JsValue]
       .validate[TransferRes]
       .toValidated
-      .andThen(res => res.status.toValidNel(s"Status was not returned $res"))
-      .map(_ => ())
+      .andThen(res =>
+        if(res.status.contains("OK"))
+          ().validNel[String]
+        else
+          "Status".invalidNel[Unit]
+      )
   }
 }
 
 object JobcoinWebService {
   type Error = String
-  case class PlaceholderResponse(userId: Int, id: Int, title: String, body: String)
-  object PlaceholderResponse {
-    implicit val jsonReads: Reads[PlaceholderResponse] = Json.reads[PlaceholderResponse]
+  case class TransactionBody(fromAddress: String, toAddress: String, amount: Double)
+  object TransactionBody {
+    implicit val jsonWrites: Writes[TransactionBody] = Json.writes[TransactionBody]
   }
 
   case class UserBalance(balance: Double, transactions: List[Transactions])
   object UserBalance {
-    implicit val jsonReads: Reads[UserBalance] = Json.reads[UserBalance]
+    implicit val jsonReads: Reads[UserBalance] = (
+      (JsPath \ "balance").read[String].map(_.toDouble) and
+        (JsPath \ "transactions").readNullable[List[Transactions]].map(_.getOrElse(List.empty))
+      )(UserBalance.apply _)
   }
 
   case class Transactions(timestamp: Instant, toAddress: String, fromAddress: Option[String], amount: Double)
   object Transactions {
-    implicit val jsonReads: Reads[Transactions] = Json.reads[Transactions]
+    implicit val jsonReads: Reads[Transactions] = (
+      (JsPath \ "timestamp").read[Instant] and
+        (JsPath \ "toAddress").read[String] and
+        (JsPath \ "fromAddress").readNullableWithDefault(Option.empty[String]) and
+        (JsPath \ "amount").read[String].map(_.toDouble)
+    )(Transactions.apply _)
   }
 
-  case class TransferRes(status: Option[String], error: Option[String]) //Is there a better way to encode this?
+  case class TransferRes(status: Option[String], error: Option[String])
   object TransferRes {
-    implicit val jsonReads: Reads[TransferRes] = Json.reads[TransferRes]
+    implicit val jsonReads: Reads[TransferRes] = (
+      (JsPath \ "status").readNullable[String] and
+        (JsPath \ "error").readNullable[String]
+      )(TransferRes.apply _)
   }
 
   /**

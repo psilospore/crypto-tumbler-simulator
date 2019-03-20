@@ -9,9 +9,7 @@ import com.typesafe.config.ConfigFactory
 import scala.concurrent.ExecutionContext.Implicits._
 import scala.io.StdIn
 
-//TODO maybe move prompt stuff to another area or something
-//House actor
-//
+
 object JobcoinMixer {
   object CompletedException extends Exception {}
   private implicit lazy val actorSystem  = ActorSystem()
@@ -23,7 +21,7 @@ object JobcoinMixer {
 
   //TODO validate addresses?
   def main(args: Array[String]): Unit = {
-    val mixingActor = actorSystem.actorOf(MixingActor.props(), name = "mixingactor")
+    val mixingActor = actorSystem.actorOf(MixingActor.props(client), name = "mixingactor")
 
     try {
       while (true) {
@@ -47,7 +45,7 @@ object JobcoinMixer {
                |
                """.stripMargin
           )
-          mixingActor ! MixingActor.CreateTransactionActor(safeAddresses.toList, depositAddress.toString)
+          mixingActor ! MixingActor.CreateTransaction(safeAddresses.toList, depositAddress.toString)
         }
       }
     } catch {

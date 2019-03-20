@@ -10,11 +10,60 @@ Such as my comment on extension methods or on Cats.
 ### Run
 `sbt run`
 
-
 ### Test
 `sbt test`
 
-## Mixing 
+## Mixing
+
+There's several different angles for vulnerabilities on mixing.
+I will attempt to document some attacks, safety mechanisms I've added, and unaddressed
+vulnerabilities.
+
+Feel free to sklp this and skip to implementation.
+
+### Examining the ledger
+
+One vulnerability is to just check all transactions made for near that amount.
+If the fee is static I can calculate the exact amount to search for.
+The description says at least 1 address so I can't just require multiple addresses.
+For that reason I give a warning if there's less than 4 addresses.
+
+I also randomize the fee. Although if there's 1 address it's still easy to track.
+
+If I also just process one transaction at a time. You could group transactions in a time
+period to associate it to the originator.
+
+If jobcoin is unpopular and there's very few transactions it becomes really easy to figure
+out where money is being sent. In the worst case only 1 real person uses jobcoin all of that person's
+transactions are visible.
+
+### Vulnerabilities in jobcoin itself
+
+Seems like there's no security. TODO describe more.
+
+### Use the jobcoin mixer
+If I'm a malicious user creates many fake transactions TODO
+
+## Implementation
+Much of the logic is between the MixingActor and TransactionActor.
+
+Besides that there is JobcoinMixer and JobcoinWebService.
+
+JobcoinMixer initializes the MixingActor and acts on the console.
+
+JobcoinWebService provides a service to interact with the Jobcoin API.
+
+TransactionActors just move a request to tumble funds through it's stages and 
+is managed by the single MixingActor.
+
+The MixingActor manages each Transaction and attempts some level of obscurity.
+
+### TransactionActor
+TODO
+### MixingActor
+TODO
+
+### Tests 
 
 ## TODOs
 
@@ -33,3 +82,6 @@ Right now I'm simply attempting a constant amount of times and just counting fai
 ### Dependency injection
 
 ### Better tests
+Test JobcoinWebService
+
+### Randomize the fee

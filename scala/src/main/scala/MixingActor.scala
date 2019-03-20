@@ -21,23 +21,29 @@ import scala.util.Random
   * If I avoid
   * @param state
   */
-class MixingActor(var state: State) extends Actor with Timers {
+class MixingActor(var state: State, jobcoinWebService: JobcoinWebService) extends Actor with Timers {
   import MixingActor._
   val log = Logging(context.system, this)
 
-  private val rnd = Random
+  val transactionActors: mutable.Set[ActorRef] = mutable.Set()
+  private val rnd                              = Random
 
   timers.startPeriodicTimer(ProcessDeposit, ProcessDeposit, PROCESS_DELAY)
 
   override def receive: Receive = {
-    case DepositReceived(deposit, addresses) => {
+    case CreateTransaction(safeAddresses, depositAddress) =>
+      val newTransactionActor = context.actorOf(
+        TransactionActor.props(safeAddresses, depositAddress, jobcoinWebService)
+      )
+      transactionActors.add(newTransactionActor)
+      newTransactionActor ! TransactionActor.Initialize
+    case DepositReceived(deposit, addresses) =>
       val fee             = deposit * FEE
       val amountToDeposit = deposit - fee
       //TODO store the fee we've collected so far.
       state.depositsInProcess += DepositInProcess(sender(), amountToDeposit, addresses)
       log.info(s"Queued ${sender()} in ${state.depositsInProcess}")
-    }
-    case ProcessDeposit if state.depositsInProcess.size > MINIMUM_PAID_ACTORS_FOR_PAYOUT => {
+    case ProcessDeposit if state.depositsInProcess.size > MINIMUM_PAID_ACTORS_FOR_PAYOUT =>
       //TODO this is bad I can easily overload the tumbler.
       // One strategy is to keep this same logic but do it for a high percentage every increment.
 
@@ -72,11 +78,10 @@ class MixingActor(var state: State) extends Actor with Timers {
           .filterNot(_._2 == prioritizedRandomIndex)
           .map(_._1)
       )
-      //TODO send prioritizedRandomDeposit.
-      // Service sends success or failure back.
-      // On success if there is no more addresses to process then don't add it back to the queue.
-      // Otherwise pop back in queue
-    }
+    //TODO send prioritizedRandomDeposit.
+    // Service sends success or failure back.
+    // On success if there is no more addresses to process then don't add it back to the queue.
+    // Otherwise pop back in queue
     case ProcessedDepositFailure(depositInProcess) =>
       //Fatal lost transaction
       //TODO persist in case we want to recover later
@@ -98,7 +103,7 @@ class MixingActor(var state: State) extends Actor with Timers {
 
 object MixingActor {
 
-  def props() = Props(new MixingActor(State()))
+  def props(jobcoinWebService: JobcoinWebService) = Props(new MixingActor(State(), jobcoinWebService))
 
   private val MINIMUM_PAID_ACTORS_FOR_PAYOUT = 20
   private val PROCESS_DELAY: FiniteDuration  = 1 minute
@@ -121,8 +126,7 @@ object MixingActor {
   )
 
   // Messages
-
-  case class CreateTransactionActor(addresses: List[String], depositAddress: String)
+  case class CreateTransaction(safeAddresses: List[String], depositAddress: String)
 
   //Deposit received in house address
   case class DepositReceived(deposit: Double, addresses: List[String])
