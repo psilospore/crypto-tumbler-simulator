@@ -1,19 +1,22 @@
 package com.gemini.jobcoin
 import java.time.Instant
-import java.util.UUID
 import java.util.concurrent.TimeUnit
 
 import akka.actor.{Actor, ActorRef, PoisonPill, Props, Timers}
 import akka.event.Logging
 
-import scala.collection.mutable
 import scala.concurrent.duration._
 import scala.util.Random
 
 /**
-  * Sends only once  users have mixed in.
-  * Most of the business and mixing logic is here.
+  * Most of the mixing logic is here.
+  * Manages transaction actors.
+  * When a transaction is in the state where their funds are in the house address they are placed in a queue of
+  * transactions to payout. They are charged a randomized fee of up to 3%.
   *
+  * When there are enough transactions to payout they are batched together and paid in non-sequential order with randomized delays.
+  * If there are multiple safe addresses only a randomized portion of the remainder is sent, and it is placed on the queue again.
+  * Note: That means finishing payout a transaction with 3 safe addresses would take 3 different batches of payout.
   *
   * TODO I would potentially have something else transfer the fee I've collected.
   * @param state
@@ -27,11 +30,10 @@ class MixingActor(
 
   val log = Logging(context.system, this)
 
-  val transactionActors: mutable.Set[ActorRef]                   = mutable.Set()
-  private val rnd                                                = Random
-  var depositsInProcess: mutable.PriorityQueue[DepositInProcess] = mutable.PriorityQueue[DepositInProcess]()
+  private val rnd = Random
 
-  timers.startPeriodicTimer(ProcessDeposit, ProcessDeposit, PROCESS_DELAY)
+  var transactionsInHouse: List[TransactionsInHouse] = List()
+  timers.startPeriodicTimer(ProcessPayout, ProcessPayout, PROCESS_DELAY)
 
   override def receive: Receive = {
 
@@ -39,24 +41,18 @@ class MixingActor(
       val newTransactionActor = context.actorOf(
         TransactionActor.props(safeAddresses, depositAddress, jobcoinWebService)
       )
-      transactionActors.add(newTransactionActor)
       newTransactionActor ! TransactionActor.Initialize
 
     case DepositReceived(deposit, addresses) =>
       val randomizedFee   = deposit * (rnd.nextInt(31) / 1000D)
       val amountToDeposit = deposit - randomizedFee
-      depositsInProcess += DepositInProcess(sender(), amountToDeposit, addresses)
       log.info(s"Charged randomized fee of $randomizedFee from total deposit of $deposit")
       log.info(s"Queued ${sender()}")
 
-    case ProcessDeposit if depositsInProcess.size >= MINIMUM_PAID_ACTORS_FOR_PAYOUT =>
-      //Fetch up until the last 10
-      val cutoff                                      = depositsInProcess.size - 1 - MINIMUM_IN_QUEUE
-      val (toProcessIndexed, newPriorityQueueIndexed) = depositsInProcess.zipWithIndex.partition(_._2 <= cutoff)
+      transactionsInHouse = TransactionsInHouse(sender(), amountToDeposit, addresses) :: transactionsInHouse
 
-      depositsInProcess = newPriorityQueueIndexed.map(_._1)
-      toProcessIndexed
-        .map(_._1)
+    case ProcessPayout if transactionsInHouse.size >= MINIMUM_PAID_ACTORS_FOR_PAYOUT =>
+      transactionsInHouse
         .foreach(deposit => {
           val amount =
             if (deposit.unusedAddresses.size == 1)
@@ -68,29 +64,34 @@ class MixingActor(
 
           context.system.scheduler.scheduleOnce(
             randomDuration(),
-            deposit.transactionActorActor,
+            deposit.transactionActor,
             TransactionActor.AttemptTransferToSafeAddress(deposit, deposit.unusedAddresses.head, amount)
           )
           log.info(s"Attempting deposit of $amount to safe address ${deposit.unusedAddresses.head}")
         })
+      transactionsInHouse = List()
 
-    case ProcessedDepositSuccess(depositInProcess, amount, address) =>
-      val newDepositInProcess = depositInProcess.copy(
-        remainder = depositInProcess.remainder - amount,
-        unusedAddresses = depositInProcess.unusedAddresses.filterNot(_ == address)
+    case ProcessedDepositSuccess(transactionInHouse, amount, address) =>
+      val newtransactionInHouse = transactionInHouse.copy(
+        remainder = transactionInHouse.remainder - amount,
+        unusedAddresses = transactionInHouse.unusedAddresses.filterNot(_ == address)
       )
-      log.info(s"Successfully deposited $amount with ${depositInProcess.remainder} remaining to safe address $address")
-      if (newDepositInProcess.unusedAddresses.nonEmpty) {
-        depositsInProcess.enqueue(depositInProcess)
+
+      log.info(
+        s"Successfully deposited $amount with ${transactionInHouse.remainder} remaining to safe address $address"
+      )
+
+      if (newtransactionInHouse.unusedAddresses.nonEmpty) {
+        transactionsInHouse = newtransactionInHouse :: transactionsInHouse
       } else {
-        log.info(s"Done processing transaction $depositInProcess")
-        depositInProcess.transactionActorActor ! PoisonPill
+        log.info(s"Done processing transaction ${newtransactionInHouse.transactionActor}")
+        transactionInHouse.transactionActor ! PoisonPill
       }
 
-    case ProcessedDepositFailure(depositInProcess) =>
+    case ProcessedDepositFailure(transactionInHouse) =>
       //Fatal lost transaction
       //TODO persist in case we want to recover later
-      log.error(s"Unable to process $depositInProcess")
+      log.error(s"Unable to process $transactionInHouse")
 
     //TODO in case of shutdown force payout
     case ForceFinishPayout(withRandomizedDelay) => //TODO
@@ -101,20 +102,17 @@ object MixingActor {
 
   def props(jobcoinWebService: JobcoinWebService) = Props(new MixingActor(jobcoinWebService))
 
-  //These values could slide depending on activity
-  private val MINIMUM_PAID_ACTORS_FOR_PAYOUT = 10
-  private val MINIMUM_IN_QUEUE               = MINIMUM_PAID_ACTORS_FOR_PAYOUT / 2
+  //These values could slide depending on activity and a larger value may be better
+  private val MINIMUM_PAID_ACTORS_FOR_PAYOUT = 5
 
-  private val PROCESS_DELAY: FiniteDuration = 30 seconds
-  val HOUSE_ADDRESS: String                 = s"HOUSE ADDRESS" //In reality we would get this from a configuration
+  private val PROCESS_DELAY: FiniteDuration = 10 seconds //TODO this could be randomized as well for timing "attacks"
+  val HOUSE_ADDRESS: String                 = "HOUSE ADDRESS" //In reality we would get this from a configuration
 
   def randomDuration(): FiniteDuration = FiniteDuration.apply(Random.nextInt(30), TimeUnit.SECONDS)
 
-  implicit val depositInProcessOrd: Ordering[DepositInProcess] = Ordering.by[DepositInProcess, Instant](_.addedToQueue)
-
-  //TODO rename this is something else now. MixingTransactionState. MixingTransactionInProcessState
-  case class DepositInProcess(
-    transactionActorActor: ActorRef,
+  //Transaction is in the house address
+  case class TransactionsInHouse(
+    transactionActor: ActorRef,
     remainder: Double,
     unusedAddresses: List[String],
     addedToQueue: Instant = Instant.now
@@ -126,9 +124,9 @@ object MixingActor {
   //Deposit received in house address
   case class DepositReceived(deposit: Double, addresses: List[String])
 
-  case object ProcessDeposit
+  case object ProcessPayout
   case class ForceFinishPayout(withRandomizedDelay: Boolean = true)
 
-  case class ProcessedDepositSuccess(depositInProcess: DepositInProcess, amount: Double, address: String)
-  case class ProcessedDepositFailure(depositInProcess: DepositInProcess)
+  case class ProcessedDepositSuccess(transactionInHouse: TransactionsInHouse, amount: Double, address: String)
+  case class ProcessedDepositFailure(transactionInHouse: TransactionsInHouse)
 }

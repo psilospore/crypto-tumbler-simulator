@@ -15,9 +15,7 @@ and in the codebase.
 ### Run
 `sbt run`
 
-Displays a console.
-
-//Note
+Displays a console with more information.
 
 ### Test
 `sbt test`
@@ -25,7 +23,32 @@ Displays a console.
 ### Console
 `sbt console`
 
-Won't recommend using
+## Important info on usage
+
+I built this assuming this tumbler would be continuously receiving
+requests.
+Requests to tumble funds are batched in groups of 5 (see the Mixing Actor documentation for more info).
+Your initial request to tumble funds won't be processed until there are 4 more on added on the queue.
+
+Also if there are multiple safe addresses those will be paid out in different batches each.
+To make it a bit easier to deal with I've created the script to generate random requests.
+
+## Example
+
+
+```
+tumble silk-1,salk-2,balk-3
+//deposit to return address
+
+// The following is to handle batches
+generate-random 5 1 //pays out to silk-1 after some time
+//wait 10 seconds
+generate-random 5 1 //pays out to salk-2 after some time
+//wait 10 seconds
+generate-random 5 1 //pays out to balk-3 after some time
+```
+
+[Screenshots](./pics)
 
 ## Mixing
 
@@ -53,12 +76,18 @@ If jobcoin is unpopular and there's very few transactions it becomes really easy
 out where money is being sent. In the worst case only 1 real person uses jobcoin all of that person's
 transactions are visible.
 
+You can also examine transactions by time. If my tumbler takes in funds
+
 ### Vulnerabilities in jobcoin itself
 
-Seems like there's no security. TODO describe more.
+Seems like there's no security. 
 
 ### Use the jobcoin mixer
-If I'm a malicious user creates many fake transactions TODO
+If I'm a malicious user I could make many fake requests to the jobcoin
+mixer, and filter those outs from the house address.
+My jobcoin mixer would be vulnerable to this kind of attack.
+
+There's more 
 
 ## Implementation
 Much of the logic is between the MixingActor and TransactionActor.
@@ -75,9 +104,18 @@ is managed by the single MixingActor.
 The MixingActor manages each Transaction and attempts some level of obscurity.
 
 ### TransactionActor
-TODO
+Move funds though it's various stages, and interacts with the Jobcoin API.
+Waiting for deposit
+Transferring to house
+Waiting for mixing actor to transfer to each safe address
+
+See transaction actor for more info.
+
 ### MixingActor
-TODO
+
+Manages transactions and has most of the mixing logic.
+
+See mixing actor for more info
 
 ### Tests 
 

@@ -82,9 +82,10 @@ class JobcoinWebServiceImpl(implicit materializer: Materializer, config: Config)
       .validate[TransferRes]
       .toValidated
       .andThen(res =>
-        if(res.status.contains("OK"))
+        if(res.status.contains("OK")){
+          println(s"Successful transaction from $sourceAddress to $destinationAddress for $amount") //TODO delete
           ().validNel[String]
-        else
+        } else
           s"Status is not ok $res".invalidNel[Unit]
       )
   }

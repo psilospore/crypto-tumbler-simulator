@@ -1,30 +1,16 @@
 package com.gemini.jobcoin
 
-import java.util.UUID
-
-import akka.actor.{Actor, ActorRef, PoisonPill, Props, Timers}
+import akka.actor.{Actor, Props, Timers}
 import akka.event.Logging
-
-import scala.concurrent.duration._
-import TransactionActor._
-import cats.syntax.validated
-import cats.instances.future
-import cats.syntax.try_
-import cats.data.{NonEmptyList, Validated, ValidatedNel}
-import cats.syntax.either._
-import cats.syntax.option._
-import cats.syntax.validated._
-import cats.syntax.try_._
-import cats.instances.try_
 import cats.data.Validated._
-import cats.syntax.nonEmptyTraverse._
-import cats.instances.list._
-import cats.instances.either._
-import cats.instances.option._
-import com.gemini.jobcoin.JobcoinWebService.{UserBalance, Error}
-import com.gemini.jobcoin.MixingActor.DepositInProcess
+import cats.data.{NonEmptyList, ValidatedNel}
+import cats.syntax.either._
+import cats.syntax.validated._
+import com.gemini.jobcoin.JobcoinWebService.{Error, UserBalance}
+import com.gemini.jobcoin.MixingActor.TransactionsInHouse
 
 import scala.concurrent.Future
+import scala.concurrent.duration._
 
 /**
   * Represents a request to tumble funds. Owned and managed by the MixingActor.
@@ -93,13 +79,13 @@ class TransactionActor(
   }
 
   def attemptTransferToSafeAddress: Receive = {
-    case a@AttemptTransferToSafeAddress(depositInProcess, destinationAddress, amount) =>
+    case a@AttemptTransferToSafeAddress(transactionInHouse, destinationAddress, amount) =>
       handleResponse[Unit](
         responseFuture = jobcoinWebService.transfer(MixingActor.HOUSE_ADDRESS, destinationAddress, amount),
         success = _ => {
           timers.cancelAll()
           failures = 0
-          context.parent ! MixingActor.ProcessedDepositSuccess(depositInProcess, amount, destinationAddress)
+          context.parent ! MixingActor.ProcessedDepositSuccess(transactionInHouse, amount, destinationAddress)
         },
         failure = _ => {
           timers
@@ -132,18 +118,18 @@ case object TransactionActor {
   //TODO after several unexpected failures. Persist this transaction to revive at a later time.
   private val FAILURE_THRESHOLD = Option(20)
 
-  //TODO maybe remove state or move failure in? TODO create transition state.
   def props(safeAddresses: List[String], depositAddress: String, jobcoinClient: JobcoinWebService): Props =
     Props(new TransactionActor(safeAddresses, depositAddress, jobcoinClient))
 
-  private case object CheckBalance
-
   val DELAY: FiniteDuration = 30 seconds
+
+  // Messages
+  case object CheckBalance
 
   case object Initialize
 
   case class AttemptTransferToHouse(amount: Double)
 
-  case class AttemptTransferToSafeAddress(depositInProcess: DepositInProcess, destinationAddress: String, amount: Double)
+  case class AttemptTransferToSafeAddress(transactionInHouse: TransactionsInHouse, destinationAddress: String, amount: Double)
 
 }

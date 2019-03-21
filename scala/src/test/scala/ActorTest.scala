@@ -1,27 +1,15 @@
-import java.util.concurrent.Future
-
-import akka.actor.{ActorRef, ActorSystem, Props}
+import akka.actor.{ActorRef, ActorSystem}
 import akka.testkit
-import akka.testkit.{ImplicitSender, TestActor, TestActors, TestKit, TestProbe}
+import akka.testkit.{ImplicitSender, TestActor, TestKit, TestProbe}
+import cats.syntax.validated._
 import com.gemini.jobcoin.JobcoinWebService.UserBalance
-import com.gemini.jobcoin.TransactionActor.Initialize
+import com.gemini.jobcoin.MixingActor.TransactionsInHouse
 import com.gemini.jobcoin.{JobcoinWebService, MixingActor, TransactionActor}
 import org.scalamock.scalatest.MockFactory
 import org.scalatest._
 
 import scala.concurrent.ExecutionContext
-import scala.concurrent.Future
 import scala.concurrent.duration._
-import cats.data.{NonEmptyList, ValidatedNel}
-import cats.syntax.either._
-import cats.syntax.option._
-import cats.syntax.validated._
-import cats.data.Validated._
-import cats.syntax.nonEmptyTraverse._
-import cats.instances.list._
-import cats.instances.either._
-import cats.instances.option._
-import com.gemini.jobcoin.MixingActor.DepositInProcess
 
 class ActorTest
     extends TestKit(ActorSystem("JobcoinActorTest"))
@@ -84,7 +72,7 @@ class ActorTest
         .never()
 
       val portionOfTestAmount = testAmount * 0.4
-      val depositInProcess    = DepositInProcess(transactionActorActor, testAmount, testSafeAddresses.tail)
+      val transactionToPay    = TransactionsInHouse(transactionActorActor, testAmount, testSafeAddresses.tail)
 
       val joncoinTransferToSafe = (mockJobcoinWebService.transfer _)
         .when(MixingActor.HOUSE_ADDRESS, testSafeAddress1, portionOfTestAmount)
@@ -92,15 +80,19 @@ class ActorTest
       joncoinTransferToSafe
         .returns(scala.concurrent.Future(().validNel[String]))
 
-      system.scheduler.scheduleOnce(3 seconds, transactionActorActor, TransactionActor.AttemptTransferToSafeAddress(
-        depositInProcess,
-        testSafeAddress1,
-        portionOfTestAmount
-      ))
+      system.scheduler.scheduleOnce(
+        3 seconds,
+        transactionActorActor,
+        TransactionActor.AttemptTransferToSafeAddress(
+          transactionToPay,
+          testSafeAddress1,
+          portionOfTestAmount
+        )
+      )
 
       managingTestProbe.expectMsg(
         2 minutes,
-        MixingActor.ProcessedDepositSuccess(depositInProcess, portionOfTestAmount, testSafeAddress1)
+        MixingActor.ProcessedDepositSuccess(transactionToPay, portionOfTestAmount, testSafeAddress1)
       )
 
       joncoinTransferToSafe

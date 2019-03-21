@@ -79,7 +79,7 @@ object JobcoinMixer {
       |
       |""".stripMargin
   val helpText: String =
-    """
+    s"""
       |Jobcoin Mixer
       |
       |Takes in at least one return address as parameters (where to send coins after mixing). Returns a deposit address to send coins to.
@@ -88,11 +88,12 @@ object JobcoinMixer {
       |    tumble return_addresses...
       |    We recommend a minimum of $MINIMUM_RECOMMENDED_ADDRESSES addresses. The less addresses given the easier it is to track.
       |
-      |    The following commands may be unsafe
       |    generate-random [number of transactions] [number of safe addresses]
       |        Since transactions are queued by priority and sent in batches it
-      |         may be tedious to run this multiple times.
+      |        may be tedious to run this multiple times.
       |        You could use this if you want to tumble your funds earlier.
+      |        This command is potentially unsafe.
+      |        See README for more info
     """.stripMargin
 
 }
